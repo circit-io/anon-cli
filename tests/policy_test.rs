@@ -18,7 +18,7 @@ fn loads_valid_policy() {
     assert_eq!(customer.classification, Classification::DirectIdentifier);
     match &customer.transform {
         Transform::Pseudonymize { entity_type } => assert_eq!(entity_type, "customer"),
-        other => panic!("expected Pseudonymize, got {:?}", other),
+        other => panic!("expected Pseudonymize, got {other:?}"),
     }
 
     let amount = policy
@@ -27,7 +27,7 @@ fn loads_valid_policy() {
     assert_eq!(amount.classification, Classification::FinancialInvariant);
     match &amount.transform {
         Transform::Preserve { precision } => assert_eq!(*precision, Some(2)),
-        other => panic!("expected Preserve, got {:?}", other),
+        other => panic!("expected Preserve, got {other:?}"),
     }
 
     let date = policy.classify("date").expect("date must be classified");
@@ -35,7 +35,7 @@ fn loads_valid_policy() {
         Transform::Coarsen { granularity } => {
             assert_eq!(format!("{:?}", granularity), "Month")
         }
-        other => panic!("expected Coarsen, got {:?}", other),
+        other => panic!("expected Coarsen, got {other:?}"),
     }
 
     let description = policy
@@ -50,7 +50,7 @@ fn missing_required_field_errors() {
     let err = Policy::from_yaml(&fixture("policy_missing_fields.yaml")).unwrap_err();
     match err {
         PolicyError::MissingField(field) => assert_eq!(field, "tenant"),
-        other => panic!("expected MissingField, got {:?}", other),
+        other => panic!("expected MissingField, got {other:?}"),
     }
 }
 
@@ -69,7 +69,7 @@ fields:
     let err = Policy::from_yaml(yaml).unwrap_err();
     match err {
         PolicyError::UnknownClassification(c) => assert_eq!(c, "secret_sauce"),
-        other => panic!("expected UnknownClassification, got {:?}", other),
+        other => panic!("expected UnknownClassification, got {other:?}"),
     }
 }
 
