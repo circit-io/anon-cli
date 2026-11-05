@@ -33,7 +33,7 @@ fn loads_valid_policy() {
     let date = policy.classify("date").expect("date must be classified");
     match &date.transform {
         Transform::Coarsen { granularity } => {
-            assert_eq!(format!("{:?}", granularity), "Month")
+            assert_eq!(format!("{granularity:?}"), "Month")
         }
         other => panic!("expected Coarsen, got {other:?}"),
     }
