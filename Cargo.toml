@@ -2,7 +2,7 @@
 name = "anon-cli"
 version = "0.1.0"
 edition = "2021"
-rust-version = "1.85"
+rust-version = "1.88"
 description = "Policy-driven anonymization pipeline CLI: cohort-scoped HMAC pseudonymization for SQL snapshots, PDFs, PBC archives, and telemetry with a fail-closed release gate"
 license = "Apache-2.0"
 repository = "https://github.com/circit-io/anon-cli"
