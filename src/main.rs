@@ -110,6 +110,22 @@ enum Commands {
         #[arg(long, default_value_t = false)]
         no_withheld_field_leak: bool,
     },
+    /// Benchmark throughput at scale (generate N rows, transform, report rows/sec)
+    Bench {
+        #[arg(short, long)]
+        policy: PathBuf,
+        #[arg(short, long)]
+        key_file: Option<PathBuf>,
+        /// Number of rows to generate and process
+        #[arg(short, long, default_value_t = 100_000)]
+        rows: usize,
+        /// Batch size for batched mode (0 = single batch)
+        #[arg(short, long, default_value_t = 0)]
+        batch_size: usize,
+        /// Temp directory for generated files
+        #[arg(long)]
+        tmpdir: Option<PathBuf>,
+    },
 }
 
 fn load_policy(path: &PathBuf) -> Result<Policy> {
@@ -259,6 +275,64 @@ fn main() -> Result<()> {
                     std::process::exit(1);
                 }
             }
+        }
+        Commands::Bench {
+            policy,
+            key_file,
+            rows,
+            batch_size,
+            tmpdir,
+        } => {
+            let policy = load_policy(&policy)?;
+            let key = load_or_generate_key(&key_file, &policy)?;
+            let tmpdir = tmpdir.unwrap_or_else(|| {
+                std::env::temp_dir().join(format!("anon-cli-bench-{}", std::process::id()))
+            });
+            std::fs::create_dir_all(&tmpdir)?;
+
+            if batch_size > 0 {
+                let results = anon_cli::bench::run_batched_bench(
+                    rows,
+                    batch_size,
+                    &policy,
+                    &key,
+                    &tmpdir,
+                )?;
+                let total_processed: usize =
+                    results.iter().map(|r| r.rows_processed).sum();
+                let total_secs: f64 = results.iter().map(|r| r.elapsed_secs).sum();
+                let total_input: usize = results.iter().map(|r| r.input_bytes).sum();
+                let aggregate_rps = if total_secs > 0.0 {
+                    total_processed as f64 / total_secs
+                } else {
+                    0.0
+                };
+                let aggregate_mbps = if total_secs > 0.0 {
+                    (total_input as f64 / 1_048_576.0) / total_secs
+                } else {
+                    0.0
+                };
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&serde_json::json!({
+                        "mode": "batched",
+                        "total_rows": rows,
+                        "batch_size": batch_size,
+                        "batches": results.len(),
+                        "total_processed": total_processed,
+                        "total_secs": total_secs,
+                        "aggregate_rows_per_sec": aggregate_rps,
+                        "aggregate_throughput_mbps": aggregate_mbps,
+                        "batch_details": results,
+                    }))?
+                );
+            } else {
+                let result =
+                    anon_cli::bench::run_csv_bench(rows, &policy, &key, &tmpdir)?;
+                println!("{}", serde_json::to_string_pretty(&result)?);
+            }
+
+            let _ = std::fs::remove_dir_all(&tmpdir);
         }
     }
     Ok(())

@@ -1,3 +1,4 @@
+pub mod bench;
 pub mod crypto;
 pub mod error;
 pub mod pbc_adapter;
