@@ -30,6 +30,6 @@ jobs:
         run: cargo test --verbose
       - name: Smoke test
         run: |
-          cargo run -- keygen -t ci -p smoke -e entity -v 1.0 -o /tmp/ci-key.json
+          cargo run -- keygen -t circit -p internal-analytics -e customer -v 1.0 -o /tmp/ci-key.json
           printf 'customer_id,amount,currency\ncust-1,10.00,USD\n' > /tmp/ci.csv
           cargo run -- sql -i /tmp/ci.csv -o /tmp/ci-out.csv -p tests/fixtures/policy_valid.yaml -k /tmp/ci-key.json
