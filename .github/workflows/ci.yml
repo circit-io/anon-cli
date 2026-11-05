@@ -1,0 +1,35 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+env:
+  CARGO_TERM_COLOR: always
+
+jobs:
+  test:
+    strategy:
+      matrix:
+        os: [ubuntu-latest, macos-latest, windows-latest]
+        toolchain: [stable, 1.75]
+    runs-on: ${{ matrix.os }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@master
+        with:
+          toolchain: ${{ matrix.toolchain }}
+          components: rustfmt, clippy
+      - uses: Swatinem/rust-cache@v2
+      - name: Format check
+        run: cargo fmt -- --check
+      - name: Clippy
+        run: cargo clippy --all-targets -- -D warnings
+      - name: Test
+        run: cargo test --verbose
+      - name: Smoke test
+        run: |
+          cargo run -- keygen -t ci -p smoke -e entity -v 1.0 -o /tmp/ci-key.json
+          printf 'customer_id,amount,currency\ncust-1,10.00,USD\n' > /tmp/ci.csv
+          cargo run -- sql -i /tmp/ci.csv -o /tmp/ci-out.csv -p tests/fixtures/policy_valid.yaml -k /tmp/ci-key.json

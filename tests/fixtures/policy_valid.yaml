@@ -1,0 +1,30 @@
+version: "1.0"
+tenant: "circit"
+purpose: "internal-analytics"
+fields:
+  customer_id:
+    classification: direct_identifier
+    transform: pseudonymize
+    entity_type: customer
+  account_number:
+    classification: direct_identifier
+    transform: pseudonymize
+    entity_type: account
+  amount:
+    classification: financial_invariant
+    transform: preserve
+    precision: 2
+  date:
+    classification: quasi_identifier
+    transform: coarsen
+    granularity: month
+  description:
+    classification: free_text
+    transform: suppress
+  balance:
+    classification: financial_invariant
+    transform: preserve
+    precision: 2
+  currency:
+    classification: non_sensitive
+    transform: preserve

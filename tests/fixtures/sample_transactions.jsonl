@@ -1,0 +1,2 @@
+{"customer_id":"cust-1","account_number":"acct-100","amount":"1500.25","date":"2024-03-15","description":"Payment from ACME Corp","balance":"20000.00","currency":"EUR","internal_note":"ref-abc"}
+{"customer_id":"cust-2","account_number":"acct-200","amount":"99999.99","date":"2024-01-30","description":"Wire transfer incoming","balance":"99999.99","currency":"USD","internal_note":"ref-ghi"}

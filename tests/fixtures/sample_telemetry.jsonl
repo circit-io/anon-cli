@@ -1,0 +1,2 @@
+{"timestamp":"2024-03-15T10:00:00Z","service.name":"payments-api","user.id":"user-42","http.status_code":200,"baggage.user.email":"jane@example.com","db.statement":"SELECT * FROM accounts","process.command_line":"./app --secret-key abc"}
+{"timestamp":"2024-03-15T10:01:00Z","service.name":"payments-api","user.id":"user-77","http.status_code":500,"baggage.session_id":"sess-9","db.statement":"INSERT INTO logs VALUES (1)","process.command_line":"./app"}

@@ -1,0 +1,7 @@
+version: "1.0"
+purpose: "internal-analytics"
+fields:
+  customer_id:
+    classification: direct_identifier
+    transform: pseudonymize
+    entity_type: customer

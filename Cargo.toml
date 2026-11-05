@@ -1,0 +1,43 @@
+[package]
+name = "anon-cli"
+version = "0.1.0"
+edition = "2021"
+rust-version = "1.75"
+description = "Policy-driven anonymization pipeline CLI: cohort-scoped HMAC pseudonymization for SQL snapshots, PDFs, PBC archives, and telemetry with a fail-closed release gate"
+license = "Apache-2.0"
+repository = "https://github.com/circit-io/anon-cli"
+homepage = "https://github.com/circit-io/anon-cli"
+documentation = "https://github.com/circit-io/anon-cli"
+keywords = ["anonymization", "pseudonymization", "privacy", "gdpr", "sec-edgar", "pbc", "audit"]
+categories = ["command-line-utilities", "cryptography"]
+
+[dependencies]
+clap = { version = "4", features = ["derive"] }
+serde = { version = "1", features = ["derive"] }
+serde_yaml = "0.9"
+serde_json = { version = "1", features = ["arbitrary_precision"] }
+unicode-normalization = "0.1"
+hmac = "0.12"
+sha2 = "0.10"
+hex = "0.4"
+csv = "1"
+rust_decimal = "1"
+rust_decimal_macros = "1"
+lopdf = "0.36"
+zip = { version = "2", default-features = false, features = ["deflate"] }
+rand = "0.8"
+thiserror = "2"
+anyhow = "1"
+
+[lib]
+name = "anon_cli"
+path = "src/lib.rs"
+
+[[bin]]
+name = "anon-cli"
+path = "src/main.rs"
+
+[profile.release]
+lto = true
+codegen-units = 1
+strip = true

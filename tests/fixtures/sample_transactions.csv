@@ -1,0 +1,4 @@
+customer_id,account_number,amount,date,description,balance,currency,internal_note
+cust-1,acct-100,1500.25,2024-03-15,Payment from ACME Corp,20000.00,EUR,ref-abc
+cust-1,acct-100,230.00,2024-04-02,Refund processed,19770.00,EUR,ref-def
+cust-2,acct-200,99999.99,2024-01-30,Wire transfer incoming,99999.99,USD,ref-ghi
