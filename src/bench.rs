@@ -18,7 +18,10 @@ pub struct BenchResult {
 
 pub fn generate_csv(path: &Path, rows: usize) -> std::io::Result<usize> {
     let mut file = std::fs::File::create(path)?;
-    writeln!(file, "customer_id,account_number,amount,currency,date,description,balance")?;
+    writeln!(
+        file,
+        "customer_id,account_number,amount,currency,date,description,balance"
+    )?;
     let mut id = 0u64;
     for _ in 0..rows {
         id += 1;

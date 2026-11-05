@@ -291,15 +291,9 @@ fn main() -> Result<()> {
             std::fs::create_dir_all(&tmpdir)?;
 
             if batch_size > 0 {
-                let results = anon_cli::bench::run_batched_bench(
-                    rows,
-                    batch_size,
-                    &policy,
-                    &key,
-                    &tmpdir,
-                )?;
-                let total_processed: usize =
-                    results.iter().map(|r| r.rows_processed).sum();
+                let results =
+                    anon_cli::bench::run_batched_bench(rows, batch_size, &policy, &key, &tmpdir)?;
+                let total_processed: usize = results.iter().map(|r| r.rows_processed).sum();
                 let total_secs: f64 = results.iter().map(|r| r.elapsed_secs).sum();
                 let total_input: usize = results.iter().map(|r| r.input_bytes).sum();
                 let aggregate_rps = if total_secs > 0.0 {
@@ -327,8 +321,7 @@ fn main() -> Result<()> {
                     }))?
                 );
             } else {
-                let result =
-                    anon_cli::bench::run_csv_bench(rows, &policy, &key, &tmpdir)?;
+                let result = anon_cli::bench::run_csv_bench(rows, &policy, &key, &tmpdir)?;
                 println!("{}", serde_json::to_string_pretty(&result)?);
             }
 
