@@ -117,16 +117,45 @@ See [`docs/REAL-DOCS-VERIFICATION-MANUAL.md`](docs/REAL-DOCS-VERIFICATION-MANUAL
 
 ## Performance
 
-Release build on Apple Silicon (single worker / parallel):
+Release build on Apple Silicon (M2 Max), measured via `anon-cli bench`:
 
-| Workload | Throughput |
-|---|---|
-| CSV transform | ~107,000 rows/s single, **~800,000 rows/s across 8 batched workers** |
-| Telemetry filter | ~15,000 records/s |
-| PBC archive | 1,000 files (1M rows) in 5.7s |
-| PDF sanitize + 90 visible-text redactions (118 pages) | 0.25s |
+| Workload | Rows | Time | Throughput |
+|---|---|---|---|
+| CSV transform (single batch) | 100K | 0.52s | 191K rows/s (11.3 MB/s) |
+| CSV transform (single batch) | 1M | 5.28s | 189K rows/s (11.7 MB/s) |
+| CSV transform (10×10K batches) | 100K | 0.53s | 190K rows/s aggregate |
+| CSV transform (10×100K batches) | 1M | 5.62s | 178K rows/s aggregate |
+| Telemetry filter | — | — | ~15K records/s |
+| PBC archive | 1K files (1M rows) | 5.7s | — |
+| PDF sanitize + 90 redactions (118 pages) | — | 0.25s | — |
 
-The CLI is single-threaded by design; scale by queueing batches across parallel processes (`xargs -P`, CI matrix jobs, or your scheduler).
+### Running batched workloads
+
+The CLI is single-threaded by design. Scale by queueing batches across parallel processes:
+
+```bash
+# Generate a key once, reuse across all batches
+anon-cli keygen -t circit -p internal-analytics -e customer -v 1.0 -o key.json
+
+# Split a large CSV into chunks, process in parallel with xargs -P
+split -l 100000 big.csv chunk_
+ls chunk_* | xargs -P 8 -I{} anon-cli sql -i {} -o {}.out -p policy.yaml -k key.json
+
+# Or use the built-in bench subcommand to measure your hardware
+anon-cli bench -p policy.yaml -k key.json --rows 1000000
+anon-cli bench -p policy.yaml -k key.json --rows 1000000 -b 100000  # batched mode
+```
+
+**Expected throughput by row count** (single-thread, M2 Max release build):
+
+| Rows | Est. time | Rows/sec |
+|---|---|---|
+| 10K | <0.1s | ~190K |
+| 100K | ~0.5s | ~190K |
+| 1M | ~5.3s | ~189K |
+| 10M | ~53s | ~189K |
+
+Throughput is linear — the transform is O(n) with no per-row allocation growth. Batched mode adds ~6% overhead from file I/O between batches. For 10M+ rows, split into 100K–1M row chunks and parallelize with `xargs -P N` where N = your CPU core count.
 
 ## Security & boundary notes
 
