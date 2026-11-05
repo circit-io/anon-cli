@@ -84,6 +84,41 @@ anon-cli release \
   --synthetic-fixture-pass --accounting-consistency-pass --no-withheld-field-leak
 ```
 
+## Example: before → after
+
+A synthetic customer statement, sanitized with `anon-cli pdf`:
+
+| Before | After |
+|---|---|
+| ![Statement before sanitization](examples/statement_before.png) | ![Statement after sanitization](examples/statement_after.png) |
+
+Source documents: [`examples/statement_before.pdf`](examples/statement_before.pdf) → [`examples/statement_after.pdf`](examples/statement_after.pdf).
+
+```bash
+anon-cli pdf \
+  -i examples/statement_before.pdf \
+  -o examples/statement_after.pdf \
+  -p tests/fixtures/policy_valid.yaml -k cohort-key.json \
+  --redact 'John Smith:customer_name' \
+  --redact 'ACCT-99213344:account_number' \
+  --redact 'john.smith@example.com:email'
+```
+
+```json
+{
+  "pages_processed": 1,
+  "objects_removed": 3,
+  "metadata_scrubbed": true,
+  "redactions_applied": 3,
+  "quarantined": false,
+  "quarantine_reason": null
+}
+```
+
+Visible PII (`John Smith`, `ACCT-99213344`, `john.smith@example.com`) is replaced in-place with cohort-scoped HMAC-SHA-256 pseudonyms; the statement period, amount due, and reference number are untouched. The JavaScript name tree, the text annotation, and the `Info` metadata (`Author`, `Title`, `Subject`, `Keywords`) are stripped in the same pass — `objects_removed: 3`.
+
+Regenerate the artifacts with [`examples/make_statement_example.sh`](examples/make_statement_example.sh). Pseudonyms are key-scoped, so a different cohort key yields different hex values.
+
 ## Policy YAML
 
 ```yaml
@@ -166,7 +201,7 @@ Throughput is linear — the transform is O(n) with no per-row allocation growth
 ## Development
 
 ```bash
-cargo test          # 52 tests incl. real SEC EDGAR differential verification
+cargo test          # 54 tests incl. real SEC EDGAR differential verification
 cargo build --release
 ```
 
