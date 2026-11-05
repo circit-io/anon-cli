@@ -10,7 +10,7 @@ use std::io::Write;
 use std::path::PathBuf;
 
 #[derive(Parser)]
-#[command(name = "anon-cli", about = "Anonymization pipeline CLI")]
+#[command(name = "anon-cli", version, about = "Anonymization pipeline CLI")]
 struct Cli {
     #[command(subcommand)]
     command: Commands,
