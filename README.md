@@ -58,11 +58,12 @@ anon-cli sql \
   -p policy.yaml -k cohort-key.json \
   --report-file staging/sql-report.json
 
-# 3. Sanitize a PDF and redact visible company identifiers
+# 3. Sanitize a PDF against a redaction roster (one "raw text:entity_type" per line)
+args=(); while IFS= read -r spec; do [ -n "$spec" ] && args+=(--redact "$spec") || true; done < redactions.txt
 anon-cli pdf \
   -i annual-report.pdf -o staging/annual-report.pdf \
   -p policy.yaml -k cohort-key.json \
-  --redact 'AAR CORP:company_name' \
+  "${args[@]}" \
   --report-file staging/pdf-report.json
 
 # 4. Process a PBC archive (mixed ZIP contents routed per type)
@@ -99,9 +100,10 @@ The redaction list comes from a PII roster, not from reading the document — th
 ```bash
 args=()
 while IFS= read -r spec; do
-  args+=(--redact "$spec")
+  if [ -n "$spec" ]; then args+=(--redact "$spec"); fi
 done < redactions.txt
 
+mkdir -p out
 for doc in inbox/*.pdf; do
   anon-cli pdf \
     -i "$doc" \
