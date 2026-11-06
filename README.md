@@ -94,15 +94,24 @@ A synthetic customer statement, sanitized with `anon-cli pdf`:
 
 Source documents: [`examples/statement_before.pdf`](examples/statement_before.pdf) → [`examples/statement_after.pdf`](examples/statement_after.pdf).
 
+The redaction list comes from a PII roster, not from reading the document — the operator ships the strings to purge (one `raw text:entity_type` per line) and sweeps it across the document set:
+
 ```bash
-anon-cli pdf \
-  -i examples/statement_before.pdf \
-  -o examples/statement_after.pdf \
-  -p tests/fixtures/policy_valid.yaml -k cohort-key.json \
-  --redact 'John Smith:customer_name' \
-  --redact 'ACCT-99213344:account_number' \
-  --redact 'john.smith@example.com:email'
+args=()
+while IFS= read -r spec; do
+  args+=(--redact "$spec")
+done < redactions.txt
+
+for doc in inbox/*.pdf; do
+  anon-cli pdf \
+    -i "$doc" \
+    -o "out/$(basename "$doc")" \
+    -p policy.yaml -k cohort-key.json \
+    "${args[@]}"
+done
 ```
+
+For this example the roster is [`examples/redactions.txt`](examples/redactions.txt). Adapter report for the run above:
 
 ```json
 {
@@ -115,7 +124,7 @@ anon-cli pdf \
 }
 ```
 
-Visible PII (`John Smith`, `ACCT-99213344`, `john.smith@example.com`) is replaced in-place with cohort-scoped HMAC-SHA-256 pseudonyms; the statement period, amount due, and reference number are untouched. The JavaScript name tree, the text annotation, and the `Info` metadata (`Author`, `Title`, `Subject`, `Keywords`) are stripped in the same pass — `objects_removed: 3`.
+The account holder's name, account number, and email are replaced in-place with cohort-scoped HMAC-SHA-256 pseudonyms; the statement period, line items, total, and reference number are untouched. Layout survives: header band, rules, and table shading render identically before and after. The JavaScript name tree, the text annotation, and the `Info` metadata (`Author`, `Title`, `Subject`, `Keywords`) are stripped in the same pass — `objects_removed: 3`.
 
 Regenerate the artifacts with [`examples/make_statement_example.sh`](examples/make_statement_example.sh). Pseudonyms are key-scoped, so a different cohort key yields different hex values.
 

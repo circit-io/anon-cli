@@ -5,8 +5,11 @@
 #   examples/statement_before.png   rendered page images used by the README
 #   examples/statement_after.png
 #
-# Pseudonyms are cohort-key scoped: a freshly generated key yields different hex
-# pseudonyms, so the committed artifacts are illustrative, not byte-reproducible.
+# Redaction specs come from examples/redactions.txt ("raw text:entity_type" per
+# line), the way a real run sources them from a PII roster - not by eyeballing
+# the document. Pseudonyms are cohort-key scoped: a freshly generated key
+# yields different hex pseudonyms, so the committed artifacts are illustrative,
+# not byte-reproducible.
 set -euo pipefail
 
 cd "$(dirname "$0")/.."
@@ -19,16 +22,19 @@ cargo run --quiet --example make_statement_pdf
 cargo run --quiet -- keygen \
   -t circit -p internal-analytics -e customer -v 1.0 -o "$KEY"
 
+args=()
+while IFS= read -r spec; do
+  [ -n "$spec" ] && args+=(--redact "$spec")
+done < examples/redactions.txt
+
 cargo run --quiet -- pdf \
   -i examples/statement_before.pdf \
   -o examples/statement_after.pdf \
   -p tests/fixtures/policy_valid.yaml \
   -k "$KEY" \
-  --redact 'John Smith:customer_name' \
-  --redact 'ACCT-99213344:account_number' \
-  --redact 'john.smith@example.com:email'
+  "${args[@]}"
 
-CROP=(-png -r 130 -singlefile -x 110 -y 50 -W 820 -H 300)
+CROP=(-png -r 96 -singlefile -x 0 -y 0 -W 816 -H 520)
 pdftoppm "${CROP[@]}" examples/statement_before.pdf examples/statement_before
 pdftoppm "${CROP[@]}" examples/statement_after.pdf examples/statement_after
 

@@ -1,0 +1,3 @@
+John Smith:customer_name
+ACCT-99213344:account_number
+john.smith@example.com:email
