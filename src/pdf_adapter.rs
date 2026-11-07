@@ -1,5 +1,6 @@
 use crate::crypto::CohortKey;
 use crate::error::AdapterError;
+use crate::pdf_font_encoding::{resolve_font_encoding, UnicodeCMap};
 use crate::policy::Policy;
 use lopdf::{Document, Object};
 use serde::{Deserialize, Serialize};
@@ -163,19 +164,32 @@ fn apply_redactions(
 ) -> Result<usize, lopdf::Error> {
     let page_ids: Vec<lopdf::ObjectId> = doc.page_iter().collect();
     let mut applied = 0;
+    let mut saw_text_ops = false;
     let mut cache: std::collections::HashMap<(Vec<u8>, char), Option<Vec<u8>>> =
         std::collections::HashMap::new();
+    let mut enc_cache: std::collections::HashMap<
+        lopdf::ObjectId,
+        std::collections::BTreeMap<Vec<u8>, UnicodeCMap>,
+    > = std::collections::HashMap::new();
     for (raw, entity_type) in redactions {
         let replacement = match key {
             Some(k) => k.pseudonymize_for(raw, entity_type),
             None => "REDACTED".to_string(),
         };
         for &page_id in &page_ids {
-            let encodings: std::collections::BTreeMap<Vec<u8>, lopdf::Encoding> = doc
-                .get_page_fonts(page_id)?
-                .into_iter()
-                .map(|(name, font)| font.get_font_encoding(doc).map(|it| (name, it)))
-                .collect::<Result<_, lopdf::Error>>()?;
+            // font resource names are per-page; the encode cache must not
+            // leak encodings across pages that reuse the same name for
+            // different fonts
+            cache.clear();
+            let encodings = match enc_cache.entry(page_id) {
+                std::collections::hash_map::Entry::Occupied(o) => o.into_mut(),
+                std::collections::hash_map::Entry::Vacant(v) => v.insert(
+                    doc.get_page_fonts(page_id)?
+                        .into_iter()
+                        .map(|(name, font)| resolve_font_encoding(doc, font).map(|m| (name, m)))
+                        .collect::<Result<_, lopdf::Error>>()?,
+                ),
+            };
             let mut content = doc.get_and_decode_page_content(page_id)?;
             let mut current_font: Option<Vec<u8>> = None;
             let mut font_size: Object = Object::Integer(12);
@@ -199,10 +213,13 @@ fn apply_redactions(
                     i += 1;
                     continue;
                 }
+                saw_text_ops = true;
                 let font_key = current_font.clone().unwrap_or_default();
                 if !encodings.contains_key(&font_key) {
-                    i += 1;
-                    continue;
+                    return Err(lopdf::Error::Syntax(format!(
+                        "text-showing operator references font /{} which is not in the page font map; refusing to skip",
+                        String::from_utf8_lossy(&font_key)
+                    )));
                 }
 
                 let start = i;
@@ -212,7 +229,7 @@ fn apply_redactions(
                 let group: Vec<lopdf::content::Operation> = ops[start..i].to_vec();
                 let (new_group, hits_n) = replace_in_group(
                     group,
-                    &encodings,
+                    encodings,
                     &font_key,
                     font_size.clone(),
                     raw,
@@ -229,12 +246,25 @@ fn apply_redactions(
             }
         }
     }
+    if applied == 0 {
+        return Err(if saw_text_ops {
+            lopdf::Error::Syntax(
+                "redactions requested but zero applied on a text-bearing document; refusing silent pass"
+                    .into(),
+            )
+        } else {
+            lopdf::Error::Syntax(
+                "no text layer: no text-showing operators found; scanned image? route to OCR stage"
+                    .into(),
+            )
+        });
+    }
     Ok(applied)
 }
 
 fn choose_replacement_font(
     replacement: &str,
-    encodings: &std::collections::BTreeMap<Vec<u8>, lopdf::Encoding>,
+    encodings: &std::collections::BTreeMap<Vec<u8>, UnicodeCMap>,
     cache: &mut std::collections::HashMap<(Vec<u8>, char), Option<Vec<u8>>>,
 ) -> Option<Vec<u8>> {
     for (name, enc) in encodings {
@@ -249,90 +279,48 @@ fn choose_replacement_font(
 }
 
 fn encodable_in(
-    encoding: &lopdf::Encoding,
+    encoding: &UnicodeCMap,
     font_key: &[u8],
     ch: char,
     cache: &mut std::collections::HashMap<(Vec<u8>, char), Option<Vec<u8>>>,
 ) -> bool {
-    match encoding {
-        lopdf::Encoding::UnicodeMapEncoding(cmap) => {
-            let key = (font_key.to_vec(), ch);
-            if let Some(hit) = cache.get(&key) {
-                return hit.is_some();
-            }
-            let mut found = None;
-            let target = ch as u32;
-            if target <= 0xFFFF {
-                if target <= 0xFF {
-                    if let Some(vals) = cmap.get(target, 1) {
-                        if vals.len() == 1 && vals[0] as u32 == target {
-                            found = Some(vec![target as u8]);
-                        }
-                    }
-                }
-                if found.is_none() {
-                    if let Some(vals) = cmap.get(target, 2) {
-                        if vals.len() == 1 && vals[0] as u32 == target {
-                            found = Some(target.to_be_bytes()[1..].to_vec());
-                        }
-                    }
-                }
-                if found.is_none() {
-                    'outer: for len in [1u8, 2] {
-                        let max: u32 = if len == 1 { 0x100 } else { 0x10000 };
-                        for code_val in (0..max).rev() {
-                            if let Some(vals) = cmap.get(code_val, len) {
-                                if vals.len() == 1 && vals[0] as u32 == target {
-                                    found =
-                                        Some(code_val.to_be_bytes()[2 - len as usize..].to_vec());
-                                    break 'outer;
-                                }
-                            }
-                        }
-                    }
-                }
-            }
-            cache.insert(key, found.clone());
-            found.is_some()
-        }
-        _ => true,
+    let key = (font_key.to_vec(), ch);
+    if let Some(hit) = cache.get(&key) {
+        return hit.is_some();
     }
+    let found = encoding.code_for_char(ch);
+    cache.insert(key, found.clone());
+    found.is_some()
 }
 
 fn safe_encode(
-    encoding: &lopdf::Encoding,
+    encoding: &UnicodeCMap,
     font_key: &[u8],
     text: &str,
     cache: &mut std::collections::HashMap<(Vec<u8>, char), Option<Vec<u8>>>,
 ) -> Result<Vec<u8>, lopdf::Error> {
-    if text
-        .chars()
-        .all(|ch| encodable_in(encoding, font_key, ch, cache))
-    {
-        return match encoding {
-            lopdf::Encoding::UnicodeMapEncoding(_) => {
-                let mut out = Vec::new();
-                for ch in text.chars() {
-                    let key = (font_key.to_vec(), ch);
-                    let code = cache.get(&key).cloned().flatten().ok_or_else(|| {
-                        lopdf::Error::Syntax(format!("character {ch:?} not encodable"))
-                    })?;
-                    out.extend(code);
-                }
-                Ok(out)
+    let mut out = Vec::new();
+    for ch in text.chars() {
+        let key = (font_key.to_vec(), ch);
+        let code = match cache.get(&key) {
+            Some(hit) => hit.clone(),
+            None => {
+                let found = encoding.code_for_char(ch);
+                cache.insert(key, found.clone());
+                found
             }
-            _ => Ok(Document::encode_text(encoding, text)),
         };
+        out.extend(code.ok_or_else(|| {
+            lopdf::Error::Syntax(format!("character {ch:?} not encodable in font"))
+        })?);
     }
-    Err(lopdf::Error::Syntax(format!(
-        "text {text:?} not encodable in font"
-    )))
+    Ok(out)
 }
 
 #[allow(clippy::too_many_arguments)]
 fn replace_in_group(
     ops: Vec<lopdf::content::Operation>,
-    encodings: &std::collections::BTreeMap<Vec<u8>, lopdf::Encoding>,
+    encodings: &std::collections::BTreeMap<Vec<u8>, UnicodeCMap>,
     font_key: &[u8],
     font_size: Object,
     raw: &str,
@@ -356,7 +344,7 @@ fn replace_in_group(
                     _ => continue,
                 };
                 for k in 0..count {
-                    let decoded = decode_operand_piece(operand, k, encoding)?;
+                    let decoded = decode_operand_piece(operand, k, encoding);
                     let start = joined.len();
                     joined.push_str(&decoded);
                     spans.push((op_idx, operand_idx, k, start, decoded));
@@ -367,7 +355,9 @@ fn replace_in_group(
         {
             let mut byte_idx = 0usize;
             for ch in joined.chars() {
-                compact_map.push(byte_idx);
+                if !ch.is_whitespace() {
+                    compact_map.push(byte_idx);
+                }
                 byte_idx += ch.len_utf8();
             }
         }
@@ -550,21 +540,16 @@ fn operand_buckets(op: &lopdf::content::Operation) -> Vec<Vec<Vec<Object>>> {
         .collect()
 }
 
-fn decode_operand_piece(
-    operand: &Object,
-    k: usize,
-    encoding: &lopdf::Encoding,
-) -> Result<String, lopdf::Error> {
+fn decode_operand_piece(operand: &Object, k: usize, encoding: &UnicodeCMap) -> String {
     let bytes = match operand {
         Object::String(bytes, _) => bytes,
-        Object::Array(items) => items
-            .iter()
-            .filter_map(|o| o.as_str().ok())
-            .nth(k)
-            .ok_or_else(|| lopdf::Error::Syntax("string piece out of range".into()))?,
-        _ => return Err(lopdf::Error::Syntax("operand not a string".into())),
+        Object::Array(items) => match items.iter().filter_map(|o| o.as_str().ok()).nth(k) {
+            Some(b) => b,
+            None => return String::new(),
+        },
+        _ => return String::new(),
     };
-    Document::decode_text(encoding, bytes)
+    encoding.decode(bytes)
 }
 
 fn delete_typed_objects(doc: &mut Document, type_name: &[u8]) {

@@ -26,6 +26,38 @@ fn version_flag_reports_crate_version() {
 }
 
 #[test]
+fn pdf_rejects_date_false_positive_in_sort_code_roster_entry() {
+    let tmpdir = std::env::temp_dir().join(format!("anon-cli-roster-cli-{}", std::process::id()));
+    std::fs::create_dir_all(&tmpdir).unwrap();
+    let input = tmpdir.join("in.pdf");
+    let output = tmpdir.join("out.pdf");
+    // minimal valid one-page pdf
+    std::fs::write(&input, b"%PDF-1.7\n").unwrap();
+    let result = cli()
+        .arg("pdf")
+        .arg("--input")
+        .arg(&input)
+        .arg("--output")
+        .arg(&output)
+        .arg("--policy")
+        .arg(fixture("policy_valid.yaml"))
+        .arg("--redact")
+        .arg("2024-01-15:sort_code")
+        .output()
+        .expect("run anon-cli pdf");
+    assert!(
+        !result.status.success(),
+        "date-shaped sort_code roster entry must be rejected"
+    );
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    assert!(
+        stderr.contains("sort_code"),
+        "stderr should name the failed validation: {stderr}"
+    );
+    std::fs::remove_dir_all(&tmpdir).ok();
+}
+
+#[test]
 fn bench_subcommand_reports_throughput_for_generated_rows() {
     let tmpdir = std::env::temp_dir().join(format!("anon-cli-bench-cli-{}", std::process::id()));
     let output = cli()

@@ -1,4 +1,4 @@
-use anon_cli::pdf_adapter::{sanitize_pdf, PdfReport};
+use anon_cli::pdf_adapter::{sanitize_pdf, sanitize_pdf_with_redactions, PdfReport};
 use anon_cli::policy::Policy;
 use lopdf::{Dictionary, Document, Object, Stream, StringFormat};
 use std::path::PathBuf;
@@ -227,6 +227,427 @@ fn counts_pages_processed() {
     let report = sanitize_pdf(&input, &output, &load_policy()).unwrap();
     assert_eq!(report.pages_processed, 1);
     std::fs::remove_file(&input).ok();
+    std::fs::remove_file(&output).ok();
+}
+
+fn doc_with_font_and_text(font: Dictionary, tounicode: Option<&[u8]>, content: &[u8]) -> Document {
+    let mut doc = Document::with_version("1.7");
+    let content_id = doc.add_object(Object::Stream(Stream::new(
+        Dictionary::new(),
+        content.to_vec(),
+    )));
+    let mut font = font;
+    if let Some(cmap) = tounicode {
+        let tu_id = doc.add_object(Object::Stream(Stream::new(
+            Dictionary::new(),
+            cmap.to_vec(),
+        )));
+        font.set("ToUnicode", Object::Reference(tu_id));
+    }
+    let font_id = doc.add_object(Object::Dictionary(font));
+    let resources = Dictionary::from_iter(vec![(
+        "Font".to_string(),
+        Object::Dictionary(Dictionary::from_iter(vec![(
+            "F1".to_string(),
+            Object::Reference(font_id),
+        )])),
+    )]);
+    let page = Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Page".to_vec())),
+        ("Contents".to_string(), Object::Reference(content_id)),
+        ("Resources".to_string(), Object::Dictionary(resources)),
+    ]);
+    let page_id = doc.add_object(Object::Dictionary(page));
+    let pages_id = doc.add_object(Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Pages".to_vec())),
+        (
+            "Kids".to_string(),
+            Object::Array(vec![Object::Reference(page_id)]),
+        ),
+        ("Count".to_string(), Object::Integer(1)),
+    ])));
+    let catalog_id = doc.add_object(Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Catalog".to_vec())),
+        ("Pages".to_string(), Object::Reference(pages_id)),
+    ])));
+    doc.trailer.set("Root", Object::Reference(catalog_id));
+    doc
+}
+
+fn font_dict(encoding: Object) -> Dictionary {
+    Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Font".to_vec())),
+        ("Subtype".to_string(), Object::Name(b"TrueType".to_vec())),
+        ("BaseFont".to_string(), Object::Name(b"TestFont".to_vec())),
+        ("Encoding".to_string(), encoding),
+    ])
+}
+
+fn run_redaction(doc: &mut Document, tag: &str, raw: &str) -> PdfReport {
+    let input = tmp(&format!("anon-pdf-{tag}-in.pdf"));
+    let output = tmp(&format!("anon-pdf-{tag}-out.pdf"));
+    doc.save(&input).unwrap();
+    let report = sanitize_pdf_with_redactions(
+        &input,
+        &output,
+        &load_policy(),
+        None,
+        &[(raw.to_string(), "sort_code".to_string())],
+    )
+    .unwrap();
+    std::fs::remove_file(&input).ok();
+    std::fs::remove_file(&output).ok();
+    report
+}
+
+// 2-byte codes: 0001..0006 -> "ABC123", 0010..0013 -> "REDACT" letters, bfrange array 0020..0021 -> "XY"
+const TEST_CMAP: &[u8] = b"/CIDInit /ProcSet findresource begin
+12 dict begin
+begincmap
+/CIDSystemInfo << /Registry (Adobe) /Ordering (UCS) /Supplement 0 >> def
+/CMapName /Adobe-Identity-UCS def
+/CMapType 2 def
+1 begincodespacerange
+<0000> <FFFF>
+endcodespacerange
+10 beginbfchar
+<0001> <0041>
+<0002> <0042>
+<0003> <0043>
+<0004> <0031>
+<0005> <0032>
+<0006> <0033>
+<0010> <0052>
+<0011> <0045>
+<0012> <0044>
+<0013> <0054>
+endbfchar
+1 beginbfrange
+<0020> <0021> [<0058> <0059>]
+endbfrange
+endcmap
+CMapName currentdict /CMap defineresource pop
+end
+end
+";
+
+#[test]
+fn redacts_unknown_encoding_name_when_tounicode_present() {
+    let font = font_dict(Object::Name(b"CustomEncoding".to_vec()));
+    let content = b"BT /F1 12 Tf <000100020003000400050006> Tj ET";
+    let mut doc = doc_with_font_and_text(font, Some(TEST_CMAP), content);
+    let report = run_redaction(&mut doc, "unk-name", "ABC123");
+    assert!(
+        !report.quarantined,
+        "quarantined: {:?}",
+        report.quarantine_reason
+    );
+    assert_eq!(report.redactions_applied, 1);
+}
+
+#[test]
+fn redacts_dictionary_base_encoding_with_differences() {
+    let enc = Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Encoding".to_vec())),
+        (
+            "BaseEncoding".to_string(),
+            Object::Name(b"WinAnsiEncoding".to_vec()),
+        ),
+        (
+            "Differences".to_string(),
+            Object::Array(vec![
+                Object::Integer(3),
+                Object::Name(b"A".to_vec()),
+                Object::Name(b"B".to_vec()),
+                Object::Name(b"C".to_vec()),
+            ]),
+        ),
+    ]));
+    let font = font_dict(enc);
+    let content = b"BT /F1 12 Tf <030405> Tj ET";
+    let mut doc = doc_with_font_and_text(font, None, content);
+    let report = run_redaction(&mut doc, "dict-diff", "ABC");
+    assert!(
+        !report.quarantined,
+        "quarantined: {:?}",
+        report.quarantine_reason
+    );
+    assert_eq!(report.redactions_applied, 1);
+}
+
+#[test]
+fn falls_back_to_base_encoding_when_tounicode_cmap_broken() {
+    let enc = Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Encoding".to_vec())),
+        (
+            "BaseEncoding".to_string(),
+            Object::Name(b"WinAnsiEncoding".to_vec()),
+        ),
+    ]));
+    let font = font_dict(enc);
+    let content = b"BT /F1 12 Tf <414243> Tj ET";
+    let mut doc = doc_with_font_and_text(font, Some(b"this is not a cmap"), content);
+    let report = run_redaction(&mut doc, "broken-tu", "ABC");
+    assert!(
+        !report.quarantined,
+        "quarantined: {:?}",
+        report.quarantine_reason
+    );
+    assert_eq!(report.redactions_applied, 1);
+}
+
+#[test]
+fn dictionary_encoding_without_base_or_usable_tounicode_quarantines_fail_closed() {
+    let enc = Object::Dictionary(Dictionary::from_iter(vec![(
+        "Type".to_string(),
+        Object::Name(b"Encoding".to_vec()),
+    )]));
+    let font = font_dict(enc);
+    let content = b"BT /F1 12 Tf <414243> Tj ET";
+    let mut doc = doc_with_font_and_text(font, Some(b"garbage, not a cmap"), content);
+    let report = run_redaction(&mut doc, "no-base", "ABC");
+    assert!(report.quarantined, "expected fail-closed quarantine");
+    let reason = report.quarantine_reason.unwrap();
+    assert!(
+        reason.contains("redaction failed"),
+        "unexpected reason: {reason}"
+    );
+}
+
+#[test]
+fn redacts_identity_h_with_tounicode_cmap() {
+    let font = font_dict(Object::Name(b"Identity-H".to_vec()));
+    let content = b"BT /F1 12 Tf <000100020003000400050006> Tj ET";
+    let mut doc = doc_with_font_and_text(font, Some(TEST_CMAP), content);
+    let report = run_redaction(&mut doc, "identity-h", "ABC123");
+    assert!(
+        !report.quarantined,
+        "quarantined: {:?}",
+        report.quarantine_reason
+    );
+    assert_eq!(report.redactions_applied, 1);
+}
+
+#[test]
+fn scanned_pdf_without_text_layer_quarantines_with_clear_reason() {
+    let mut doc = Document::with_version("1.7");
+    let content = b"q 100 0 0 100 0 0 cm /Im1 Do Q";
+    let content_id = doc.add_object(Object::Stream(Stream::new(
+        Dictionary::new(),
+        content.to_vec(),
+    )));
+    let page = Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Page".to_vec())),
+        ("Contents".to_string(), Object::Reference(content_id)),
+        (
+            "Resources".to_string(),
+            Object::Dictionary(Dictionary::new()),
+        ),
+    ]);
+    let page_id = doc.add_object(Object::Dictionary(page));
+    let pages_id = doc.add_object(Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Pages".to_vec())),
+        (
+            "Kids".to_string(),
+            Object::Array(vec![Object::Reference(page_id)]),
+        ),
+        ("Count".to_string(), Object::Integer(1)),
+    ])));
+    let catalog_id = doc.add_object(Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Catalog".to_vec())),
+        ("Pages".to_string(), Object::Reference(pages_id)),
+    ])));
+    doc.trailer.set("Root", Object::Reference(catalog_id));
+
+    let report = run_redaction(&mut doc, "scanned", "ABC123");
+    assert!(report.quarantined, "scanned pdf must quarantine");
+    let reason = report.quarantine_reason.unwrap();
+    assert!(
+        reason.contains("no text layer"),
+        "reason should name the no-text-layer class, got: {reason}"
+    );
+}
+
+fn decoded_page_texts(path: &PathBuf) -> Vec<String> {
+    let doc = Document::load(path).unwrap();
+    let mut out = Vec::new();
+    for page_id in doc.page_iter() {
+        let content = doc.get_and_decode_page_content(page_id).unwrap();
+        let fonts = doc.get_page_fonts(page_id).unwrap();
+        let mut cur: Vec<u8> = Vec::new();
+        let mut page_text = String::new();
+        for op in &content.operations {
+            if op.operator.as_str() == "Tf" {
+                cur = op
+                    .operands
+                    .first()
+                    .and_then(|o| o.as_name().ok())
+                    .map(|n| n.to_vec())
+                    .unwrap_or_default();
+            }
+            if matches!(op.operator.as_str(), "Tj" | "TJ") {
+                if let Some(font) = fonts.get(&cur) {
+                    let enc =
+                        anon_cli::pdf_font_encoding::resolve_font_encoding(&doc, font).unwrap();
+                    for operand in &op.operands {
+                        match operand {
+                            Object::String(bytes, _) => page_text.push_str(&enc.decode(bytes)),
+                            Object::Array(items) => {
+                                for it in items {
+                                    if let Ok(b) = it.as_str() {
+                                        page_text.push_str(&enc.decode(b));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        out.push(page_text);
+    }
+    out
+}
+
+fn add_page_with_font(
+    doc: &mut Document,
+    font: Dictionary,
+    tounicode: Option<&[u8]>,
+    content: &[u8],
+) -> lopdf::ObjectId {
+    let content_id = doc.add_object(Object::Stream(Stream::new(
+        Dictionary::new(),
+        content.to_vec(),
+    )));
+    let mut font = font;
+    if let Some(cmap) = tounicode {
+        let tu_id = doc.add_object(Object::Stream(Stream::new(
+            Dictionary::new(),
+            cmap.to_vec(),
+        )));
+        font.set("ToUnicode", Object::Reference(tu_id));
+    }
+    let font_id = doc.add_object(Object::Dictionary(font));
+    let resources = Dictionary::from_iter(vec![(
+        "Font".to_string(),
+        Object::Dictionary(Dictionary::from_iter(vec![(
+            "F1".to_string(),
+            Object::Reference(font_id),
+        )])),
+    )]);
+    let page = Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Page".to_vec())),
+        ("Contents".to_string(), Object::Reference(content_id)),
+        ("Resources".to_string(), Object::Dictionary(resources)),
+    ]);
+    doc.add_object(Object::Dictionary(page))
+}
+
+fn finish_doc(doc: &mut Document, page_ids: Vec<lopdf::ObjectId>) {
+    let pages_id = doc.add_object(Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Pages".to_vec())),
+        (
+            "Kids".to_string(),
+            Object::Array(page_ids.into_iter().map(Object::Reference).collect()),
+        ),
+        ("Count".to_string(), Object::Integer(1)),
+    ])));
+    let catalog_id = doc.add_object(Object::Dictionary(Dictionary::from_iter(vec![
+        ("Type".to_string(), Object::Name(b"Catalog".to_vec())),
+        ("Pages".to_string(), Object::Reference(pages_id)),
+    ])));
+    doc.trailer.set("Root", Object::Reference(catalog_id));
+}
+
+fn run_redaction_file(doc: &mut Document, tag: &str, raw: &str) -> (PdfReport, PathBuf) {
+    let input = tmp(&format!("anon-pdf-{tag}-in.pdf"));
+    let output = tmp(&format!("anon-pdf-{tag}-out.pdf"));
+    doc.save(&input).unwrap();
+    let report = sanitize_pdf_with_redactions(
+        &input,
+        &output,
+        &load_policy(),
+        None,
+        &[(raw.to_string(), "account_number".to_string())],
+    )
+    .unwrap();
+    std::fs::remove_file(&input).ok();
+    (report, output)
+}
+
+#[test]
+fn whitespace_compact_match_leaves_no_identifier_fragment() {
+    // raw contains a space, document text does not: the compact-match path
+    // must map back to exact byte offsets in the joined string
+    let font = font_dict(Object::Name(b"WinAnsiEncoding".to_vec()));
+    let mut doc = Document::with_version("1.7");
+    let page_id = add_page_with_font(&mut doc, font, None, b"BT /F1 12 Tf (Account 12345678 end) Tj ET");
+    finish_doc(&mut doc, vec![page_id]);
+    let (report, output) = run_redaction_file(&mut doc, "ws-compact", "1234 5678");
+    assert!(!report.quarantined, "{:?}", report.quarantine_reason);
+    assert_eq!(report.redactions_applied, 1);
+    let texts = decoded_page_texts(&output);
+    assert_eq!(texts, vec!["Account REDACTED end".to_string()]);
+    std::fs::remove_file(&output).ok();
+}
+
+#[test]
+fn zero_redactions_on_text_bearing_pdf_quarantines_fail_closed() {
+    let font = font_dict(Object::Name(b"WinAnsiEncoding".to_vec()));
+    let mut doc = Document::with_version("1.7");
+    let page_id = add_page_with_font(&mut doc, font, None, b"BT /F1 12 Tf (hello world) Tj ET");
+    finish_doc(&mut doc, vec![page_id]);
+    let (report, output) = run_redaction_file(&mut doc, "zero-hit", "ZZZ-NOT-PRESENT");
+    assert!(report.quarantined, "must not silently pass with 0 applied");
+    let reason = report.quarantine_reason.unwrap();
+    assert!(
+        reason.contains("zero applied"),
+        "unexpected reason: {reason}"
+    );
+    std::fs::remove_file(&output).ok();
+}
+
+#[test]
+fn text_op_with_unknown_font_quarantines_instead_of_skipping() {
+    let font = font_dict(Object::Name(b"WinAnsiEncoding".to_vec()));
+    let mut doc = Document::with_version("1.7");
+    // content references /F9 but resources only define /F1
+    let page_id = add_page_with_font(&mut doc, font, None, b"BT /F9 12 Tf (12345678) Tj ET");
+    finish_doc(&mut doc, vec![page_id]);
+    let (report, output) = run_redaction_file(&mut doc, "unknown-font", "12345678");
+    assert!(report.quarantined, "unknown-font text op must quarantine");
+    assert!(report
+        .quarantine_reason
+        .unwrap()
+        .contains("not in the page font map"));
+    std::fs::remove_file(&output).ok();
+}
+
+#[test]
+fn same_font_name_on_different_pages_does_not_cross_contaminate_cache() {
+    let mut doc = Document::with_version("1.7");
+    // page 1: F1 = WinAnsi (1-byte codes), text "XABCX"
+    let p1 = add_page_with_font(
+        &mut doc,
+        font_dict(Object::Name(b"WinAnsiEncoding".to_vec())),
+        None,
+        b"BT /F1 12 Tf (XABCX) Tj ET",
+    );
+    // page 2: F1 = Identity-H with 2-byte ToUnicode cmap, text "ABC"
+    let p2 = add_page_with_font(
+        &mut doc,
+        font_dict(Object::Name(b"Identity-H".to_vec())),
+        Some(TEST_CMAP),
+        b"BT /F1 12 Tf <000100020003> Tj ET",
+    );
+    finish_doc(&mut doc, vec![p1, p2]);
+    let (report, output) = run_redaction_file(&mut doc, "two-page", "ABC");
+    assert!(!report.quarantined, "{:?}", report.quarantine_reason);
+    assert_eq!(report.redactions_applied, 2);
+    let texts = decoded_page_texts(&output);
+    assert_eq!(texts[0], "XREDACTEDX");
+    assert_eq!(texts[1], "REDACTED");
     std::fs::remove_file(&output).ok();
 }
 
