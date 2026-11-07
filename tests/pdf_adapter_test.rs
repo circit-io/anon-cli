@@ -582,7 +582,12 @@ fn whitespace_compact_match_leaves_no_identifier_fragment() {
     // must map back to exact byte offsets in the joined string
     let font = font_dict(Object::Name(b"WinAnsiEncoding".to_vec()));
     let mut doc = Document::with_version("1.7");
-    let page_id = add_page_with_font(&mut doc, font, None, b"BT /F1 12 Tf (Account 12345678 end) Tj ET");
+    let page_id = add_page_with_font(
+        &mut doc,
+        font,
+        None,
+        b"BT /F1 12 Tf (Account 12345678 end) Tj ET",
+    );
     finish_doc(&mut doc, vec![page_id]);
     let (report, output) = run_redaction_file(&mut doc, "ws-compact", "1234 5678");
     assert!(!report.quarantined, "{:?}", report.quarantine_reason);

@@ -16,8 +16,16 @@ fn sort_code_shape_rejects_false_positives() {
     // shape-valid as a sort code -- date rejection happens at extraction
     // time via boundary rules (see find_sort_codes tests)
     for s in [
-        "2024-01-15", "00-34-56", "12-34-5", "12-345-6", "1-34-56", "12 34 56",
-        "ab-cd-ef", "12-34-567", "", "12-34",
+        "2024-01-15",
+        "00-34-56",
+        "12-34-5",
+        "12-345-6",
+        "1-34-56",
+        "12 34 56",
+        "ab-cd-ef",
+        "12-34-567",
+        "",
+        "12-34",
     ] {
         assert!(!is_sort_code(s), "{s:?} should be rejected");
     }
@@ -33,7 +41,14 @@ fn account_number_shape_accepts_real_numbers() {
 #[test]
 fn account_number_shape_rejects_false_positives() {
     for s in [
-        "123456789", "1234567", "1234-567", "2024-01-15", "1234-56-78", "1234.5678", "abcd-efgh", "",
+        "123456789",
+        "1234567",
+        "1234-567",
+        "2024-01-15",
+        "1234-56-78",
+        "1234.5678",
+        "abcd-efgh",
+        "",
     ] {
         assert!(!is_account_number(s), "{s:?} should be rejected");
     }
@@ -41,14 +56,18 @@ fn account_number_shape_rejects_false_positives() {
 
 #[test]
 fn find_sort_codes_ignores_dates_amounts_and_longer_runs() {
-    let text = "statement dated 2024-01-15, amount 1,234-56-78 GBP, ref 12-34-56-78, sort code: 20-30-40.";
+    let text =
+        "statement dated 2024-01-15, amount 1,234-56-78 GBP, ref 12-34-56-78, sort code: 20-30-40.";
     assert_eq!(find_sort_codes(text), vec!["20-30-40".to_string()]);
 
     let dates = "2024-01-15 2024-01-15T10:30:00Z 15-01-2024 2024/01/15";
     assert!(find_sort_codes(dates).is_empty(), "dates must not match");
 
     let amounts = "total 12-34-56.78 and 99-88-77,00 EUR";
-    assert!(find_sort_codes(amounts).is_empty(), "amounts must not match");
+    assert!(
+        find_sort_codes(amounts).is_empty(),
+        "amounts must not match"
+    );
 }
 
 #[test]

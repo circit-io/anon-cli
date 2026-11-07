@@ -421,9 +421,9 @@ fn load_staged_reports(staging: &PathBuf) -> Result<Vec<TransformReport>> {
 fn parse_redactions(specs: &[String]) -> Result<Vec<(String, String)>> {
     let mut out = Vec::with_capacity(specs.len());
     for s in specs {
-        let (text, entity) = s
-            .rsplit_once(':')
-            .with_context(|| format!("invalid --redact value {s:?}; expected \"text:entity_type\""))?;
+        let (text, entity) = s.rsplit_once(':').with_context(|| {
+            format!("invalid --redact value {s:?}; expected \"text:entity_type\"")
+        })?;
         anon_cli::roster::validate_entry(text, entity)
             .map_err(|e| anyhow::anyhow!("invalid --redact value {s:?}: {e}"))?;
         out.push((text.to_string(), entity.to_string()));

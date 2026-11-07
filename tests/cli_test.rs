@@ -59,7 +59,8 @@ fn pdf_rejects_date_false_positive_in_sort_code_roster_entry() {
 
 #[test]
 fn roster_extract_emits_narrowed_matches_from_text_file() {
-    let tmpdir = std::env::temp_dir().join(format!("anon-cli-roster-extract-{}", std::process::id()));
+    let tmpdir =
+        std::env::temp_dir().join(format!("anon-cli-roster-extract-{}", std::process::id()));
     std::fs::create_dir_all(&tmpdir).unwrap();
     let input = tmpdir.join("doc.txt");
     std::fs::write(
