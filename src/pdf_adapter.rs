@@ -157,6 +157,51 @@ fn sanitize_loaded(
     }
 }
 
+/// Decode all visible text of every page using the same font resolution as
+/// redaction, for roster extraction upstream of `--redact`.
+pub fn extract_page_texts(doc: &Document) -> Result<Vec<String>, lopdf::Error> {
+    let mut pages = Vec::new();
+    for page_id in doc.page_iter() {
+        let encodings: std::collections::BTreeMap<Vec<u8>, UnicodeCMap> = doc
+            .get_page_fonts(page_id)?
+            .into_iter()
+            .map(|(name, font)| resolve_font_encoding(doc, font).map(|m| (name, m)))
+            .collect::<Result<_, lopdf::Error>>()?;
+        let content = doc.get_and_decode_page_content(page_id)?;
+        let mut cur: Vec<u8> = Vec::new();
+        let mut text = String::new();
+        for op in &content.operations {
+            if op.operator.as_str() == "Tf" {
+                cur = op
+                    .operands
+                    .first()
+                    .and_then(|o| o.as_name().ok())
+                    .map(|n| n.to_vec())
+                    .unwrap_or_default();
+            }
+            if matches!(op.operator.as_str(), "Tj" | "TJ") {
+                if let Some(enc) = encodings.get(&cur) {
+                    for operand in &op.operands {
+                        match operand {
+                            Object::String(bytes, _) => text.push_str(&enc.decode(bytes)),
+                            Object::Array(items) => {
+                                for it in items {
+                                    if let Ok(b) = it.as_str() {
+                                        text.push_str(&enc.decode(b));
+                                    }
+                                }
+                            }
+                            _ => {}
+                        }
+                    }
+                }
+            }
+        }
+        pages.push(text);
+    }
+    Ok(pages)
+}
+
 fn apply_redactions(
     doc: &mut Document,
     key: Option<&CohortKey>,

@@ -652,6 +652,18 @@ fn same_font_name_on_different_pages_does_not_cross_contaminate_cache() {
 }
 
 #[test]
+fn extract_page_texts_decodes_via_resolved_font_encoding() {
+    let font = font_dict(Object::Name(b"Identity-H".to_vec()));
+    let doc = doc_with_font_and_text(
+        font,
+        Some(TEST_CMAP),
+        b"BT /F1 12 Tf <000100020003000400050006> Tj ET",
+    );
+    let texts = anon_cli::pdf_adapter::extract_page_texts(&doc).unwrap();
+    assert_eq!(texts, vec!["ABC123".to_string()]);
+}
+
+#[test]
 fn scrubs_page_level_metadata() {
     let (mut doc, _, _, page_id) = new_doc();
     let xmp = Stream::new(

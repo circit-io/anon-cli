@@ -91,6 +91,11 @@ enum Commands {
         #[arg(short, long)]
         output: PathBuf,
     },
+    /// Roster operations
+    Roster {
+        #[command(subcommand)]
+        action: RosterAction,
+    },
     /// Run release gate validation
     Release {
         #[arg(short, long)]
@@ -125,6 +130,19 @@ enum Commands {
         /// Temp directory for generated files
         #[arg(long)]
         tmpdir: Option<PathBuf>,
+    },
+}
+
+#[derive(Subcommand)]
+enum RosterAction {
+    /// Print "raw:entity_type" roster lines found in a text file or PDF,
+    /// using the narrowed matchers (dates/amounts/cards are excluded)
+    Extract {
+        #[arg(short, long)]
+        input: PathBuf,
+        /// Which entity types to extract: all (default), sort_code, account_number
+        #[arg(short, long, default_value = "all")]
+        entity: String,
     },
 }
 
@@ -245,6 +263,25 @@ fn main() -> Result<()> {
             write_private_key_file(&output, &key.to_key_file_json()?)?;
             println!("key written to {}", output.display());
         }
+        Commands::Roster { action } => match action {
+            RosterAction::Extract { input, entity } => {
+                let filter = anon_cli::roster::parse_entity_filter(&entity)
+                    .map_err(|e| anyhow::anyhow!("invalid --entity {entity:?}: {e}"))?;
+                let text = if input.extension().is_some_and(|e| e == "pdf") {
+                    let doc = lopdf::Document::load(&input)
+                        .with_context(|| format!("loading pdf {}", input.display()))?;
+                    anon_cli::pdf_adapter::extract_page_texts(&doc)
+                        .with_context(|| format!("extracting text from {}", input.display()))?
+                        .join("\n")
+                } else {
+                    std::fs::read_to_string(&input)
+                        .with_context(|| format!("reading {}", input.display()))?
+                };
+                for (raw, entity_type) in anon_cli::roster::extract_from_text(&text, filter) {
+                    println!("{raw}:{entity_type}");
+                }
+            }
+        },
         Commands::Release {
             staging,
             release_dir,

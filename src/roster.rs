@@ -149,6 +149,47 @@ pub fn find_account_numbers(text: &str) -> Vec<String> {
     out
 }
 
+#[derive(Clone, Copy, PartialEq, Eq, Debug)]
+pub enum RosterEntity {
+    SortCode,
+    AccountNumber,
+}
+
+pub fn parse_entity_filter(s: &str) -> Result<Option<RosterEntity>, String> {
+    match s.trim().to_ascii_lowercase().as_str() {
+        "all" => Ok(None),
+        "sort_code" => Ok(Some(RosterEntity::SortCode)),
+        "account_number" => Ok(Some(RosterEntity::AccountNumber)),
+        other => Err(format!(
+            "unknown entity filter {other:?}; expected all|sort_code|account_number"
+        )),
+    }
+}
+
+/// Extract roster candidates (`raw`, `entity_type`) from free text using the
+/// narrowed matchers, deduplicated in first-seen order. Upstream extractors
+/// should use this (via `anon-cli roster extract`) instead of broad regexes
+/// so dates/amounts/cards never enter the roster.
+pub fn extract_from_text(text: &str, filter: Option<RosterEntity>) -> Vec<(String, String)> {
+    let mut out: Vec<(String, String)> = Vec::new();
+    let mut push = |v: String, et: &str| {
+        if !out.iter().any(|(e, t)| e == &v && t == et) {
+            out.push((v, et.to_string()));
+        }
+    };
+    if filter != Some(RosterEntity::AccountNumber) {
+        for sc in find_sort_codes(text) {
+            push(sc, "sort_code");
+        }
+    }
+    if filter != Some(RosterEntity::SortCode) {
+        for an in find_account_numbers(text) {
+            push(an, "account_number");
+        }
+    }
+    out
+}
+
 /// Fail-closed intake check for a `--redact "raw:entity_type"` spec.
 /// Entries tagged `sort_code` / `account_number` must match the narrowed
 /// shapes; a mismatch means the upstream extractor emitted a date/amount

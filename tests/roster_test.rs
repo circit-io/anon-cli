@@ -1,4 +1,7 @@
-use anon_cli::roster::{find_account_numbers, find_sort_codes, is_account_number, is_sort_code, validate_entry};
+use anon_cli::roster::{
+    extract_from_text, find_account_numbers, find_sort_codes, is_account_number, is_sort_code,
+    parse_entity_filter, validate_entry, RosterEntity,
+};
 
 #[test]
 fn sort_code_shape_accepts_real_codes() {
@@ -75,6 +78,36 @@ fn validate_entry_enforces_narrowed_shapes_fail_closed() {
     // other entity types pass through untouched
     assert!(validate_entry("John Smith", "customer_name").is_ok());
     assert!(validate_entry("2024-01-15", "free_text").is_ok());
+}
+
+#[test]
+fn extract_from_text_emits_only_narrowed_matches_with_entity_tags() {
+    let text = "Statement 2024-01-15. Sort code 20-30-40, account 12345678, card 1234-5678-9012-3456, amount 1234.5678, other acct 1234-5678.";
+    let mut found = extract_from_text(text, None);
+    found.sort();
+    assert_eq!(
+        found,
+        vec![
+            ("1234-5678".to_string(), "account_number".to_string()),
+            ("12345678".to_string(), "account_number".to_string()),
+            ("20-30-40".to_string(), "sort_code".to_string()),
+        ]
+    );
+}
+
+#[test]
+fn extract_from_text_respects_entity_filter_and_dedupes() {
+    let text = "20-30-40 and 20-30-40 again, 12345678";
+    assert_eq!(
+        extract_from_text(text, Some(RosterEntity::SortCode)),
+        vec![("20-30-40".to_string(), "sort_code".to_string())]
+    );
+    assert_eq!(
+        extract_from_text(text, Some(RosterEntity::AccountNumber)),
+        vec![("12345678".to_string(), "account_number".to_string())]
+    );
+    assert!(parse_entity_filter("bogus").is_err());
+    assert_eq!(parse_entity_filter(" ALL ").unwrap(), None);
 }
 
 #[test]
